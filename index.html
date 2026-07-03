@@ -427,12 +427,14 @@ function collectGolden() {
   game.score += CONFIG.goldenScore;
   hud.score.textContent = game.score;
   golden = null;
+  playGoldenSfx();
 }
 
 function collectPellet() {
   game.score += CONFIG.pelletScore;
   game.pellets++;
   hud.score.textContent = game.score;
+  playPelletSfx();
 
   // Your success feeds the enemy: +1 segment, a touch more speed
   for (const snake of snakes) {
@@ -578,6 +580,22 @@ function stopMusic() {
     clearInterval(music.timer);
     music.timer = null;
   }
+}
+
+// Pickup sounds — routed through the master gain, so M mutes them too
+function playPelletSfx() {
+  if (!music.ctx) return;
+  const t = music.ctx.currentTime;
+  blip(660, t, 0.07, "square", 0.24);
+  blip(880, t + 0.06, 0.12, "square", 0.24);
+}
+
+// The golden gets the full coin fanfare it was gambled for
+function playGoldenSfx() {
+  if (!music.ctx) return;
+  const t = music.ctx.currentTime;
+  blip(988, t, 0.09, "square", 0.28);
+  blip(1319, t + 0.08, 0.38, "square", 0.28);
 }
 
 // Descending three-note sting as the head closes in
