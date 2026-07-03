@@ -87,6 +87,9 @@ const CONFIG = {
   deathCamSecs: 0.8,         // real-time length of the death cam
   nearMissShake: 4,          // px of screen shake when the head grazes you
   deathShake: 10,
+  musicVolume: 0.16,
+  musicBaseBpm: 128,         // tempo climbs with pellets eaten...
+  musicMaxBpm: 176,          // ...up to here
   deathInputLockMs: 400, // ignore restart keys briefly after death
 };
 
@@ -476,6 +479,8 @@ function checkDeath() {
     game.state = State.DYING;
     game.dyingTimer = 0;
     addShake(CONFIG.deathShake);
+    stopMusic();
+    playDeathSting();
     return;
   }
 
@@ -498,6 +503,101 @@ function finishDying() {
     try { localStorage.setItem("runFromSnake.best", String(game.best)); } catch {}
   }
   hud.best.textContent = game.best;
+}
+
+// ---------------------------------------------------------------------------
+// Music — a procedural chiptune loop (Web Audio, no assets). The tempo
+// climbs with your pellet count: the better you do, the more it panics.
+// ---------------------------------------------------------------------------
+const music = {
+  ctx: null,
+  master: null,
+  timer: null,     // scheduler interval id
+  nextNoteTime: 0,
+  step: 0,
+  muted: false,
+};
+
+// A-minor, 16 eighth-note steps per loop. 0 = rest.
+const BASS_SEQ = [45, 0, 45, 57, 41, 0, 41, 53, 43, 0, 43, 55, 45, 0, 43, 41];
+const LEAD_SEQ = [69, 72, 76, 72, 65, 69, 72, 69, 67, 71, 74, 71, 69, 72, 76, 79];
+
+function midiToFreq(m) {
+  return 440 * Math.pow(2, (m - 69) / 12);
+}
+
+function initAudio() {
+  if (music.ctx) return;
+  music.ctx = new (window.AudioContext || window.webkitAudioContext)();
+  music.master = music.ctx.createGain();
+  music.master.gain.value = music.muted ? 0 : CONFIG.musicVolume;
+  music.master.connect(music.ctx.destination);
+}
+
+function blip(freq, time, dur, type, gain) {
+  const osc = music.ctx.createOscillator();
+  const env = music.ctx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  env.gain.setValueAtTime(gain, time);
+  env.gain.exponentialRampToValueAtTime(0.001, time + dur);
+  osc.connect(env).connect(music.master);
+  osc.start(time);
+  osc.stop(time + dur);
+}
+
+function currentBpm() {
+  return Math.min(CONFIG.musicMaxBpm, CONFIG.musicBaseBpm + game.pellets * 1.5);
+}
+
+function scheduleStep(step, time) {
+  const stepDur = 60 / currentBpm() / 2; // eighth notes
+  if (BASS_SEQ[step]) blip(midiToFreq(BASS_SEQ[step] - 12), time, stepDur * 1.8, "triangle", 0.9);
+  if (LEAD_SEQ[step]) blip(midiToFreq(LEAD_SEQ[step]), time, stepDur * 0.9, "square", 0.22);
+  if (step % 4 === 2) blip(7500, time, 0.03, "square", 0.12); // offbeat hat
+}
+
+function startMusic() {
+  initAudio();
+  music.ctx.resume();
+  if (music.timer) return;
+  music.step = 0;
+  music.nextNoteTime = music.ctx.currentTime + 0.06;
+  music.timer = setInterval(() => {
+    // standard lookahead scheduler: queue everything due in the next 120ms
+    while (music.nextNoteTime < music.ctx.currentTime + 0.12) {
+      scheduleStep(music.step, music.nextNoteTime);
+      music.nextNoteTime += 60 / currentBpm() / 2;
+      music.step = (music.step + 1) % 16;
+    }
+  }, 30);
+}
+
+function stopMusic() {
+  if (music.timer) {
+    clearInterval(music.timer);
+    music.timer = null;
+  }
+}
+
+// Descending three-note sting as the head closes in
+function playDeathSting() {
+  if (!music.ctx) return;
+  const t = music.ctx.currentTime;
+  blip(midiToFreq(57), t, 0.28, "square", 0.3);
+  blip(midiToFreq(51), t + 0.22, 0.28, "square", 0.3);
+  blip(midiToFreq(45), t + 0.44, 0.7, "square", 0.32);
+}
+
+function toggleMute() {
+  music.muted = !music.muted;
+  if (music.master) music.master.gain.value = music.muted ? 0 : CONFIG.musicVolume;
+  try { localStorage.setItem("runFromSnake.muted", music.muted ? "1" : "0"); } catch {}
+  document.getElementById("hint").textContent = hintText();
+}
+
+function hintText() {
+  return `WASD / arrows to move — M to ${music.muted ? "unmute" : "mute"}. You are the apple. Run.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -524,6 +624,7 @@ function resetRun() {
   spawnPellet();
   shakeMag = 0;
   lastNearMiss = -1;
+  startMusic();
   game.state = State.PLAYING;
 }
 
@@ -814,6 +915,11 @@ function drawTitle() {
 // Input — held-direction tracking + starting the run from the title screen
 // ---------------------------------------------------------------------------
 window.addEventListener("keydown", (e) => {
+  if (e.code === "KeyM") {
+    initAudio();
+    toggleMute();
+    return; // mute never starts or restarts a run
+  }
   const dir = KEYMAP[e.code];
   if (dir) {
     e.preventDefault();
@@ -842,8 +948,10 @@ window.addEventListener("blur", () => { heldDirs.length = 0; });
 // ---------------------------------------------------------------------------
 try {
   game.best = parseInt(localStorage.getItem("runFromSnake.best"), 10) || 0;
+  music.muted = localStorage.getItem("runFromSnake.muted") === "1";
 } catch {}
 hud.best.textContent = game.best;
+document.getElementById("hint").textContent = hintText();
 
 requestAnimationFrame(frame);
 </script>

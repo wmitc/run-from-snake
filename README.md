@@ -14,6 +14,7 @@ Open `index.html` in any browser. No build, no dependencies, one file.
 - **Goal:** collect pellets for score
 - **The catch:** every pellet adds a segment to the snake and speeds it up
 - **Death:** touching the snake — head or body
+- **Music:** procedural chiptune that speeds up as you score — **M** to mute
 
 You're slightly faster than the snake and can turn instantly while it commits to its
 path. Bait it into corners. Use its body as a wall. Steer your enemy.
