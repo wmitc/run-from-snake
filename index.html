@@ -70,6 +70,11 @@ const CONFIG = {
   playerStepMs: 110,     // ms per grid step while a direction is held
   snakeStepMs: 200,      // starting ms per snake step (speeds up per pellet)
   snakeStartLength: 4,
+  snakeSpeedupMs: 2.5,   // snake step interval shrinks this much per pellet
+  snakeStepMsFloor: 130, // snake never gets faster than this (player is 110)
+  pelletScore: 10,
+  pelletMinDistPlayer: 4,    // don't spawn pellets in the player's lap...
+  pelletMinDistSnakeHead: 5, // ...or in the snake's jaws
   deathInputLockMs: 400, // ignore restart keys briefly after death
 };
 
@@ -163,6 +168,7 @@ function updatePlayer(dtMs) {
     player.x = nx;
     player.y = ny;
     player.moving = true;
+    if (pellet && pellet.x === player.x && pellet.y === player.y) collectPellet();
   } else {
     player.moving = false; // walls: stay put, keep facing
   }
@@ -268,13 +274,58 @@ function updateSnakes(dtMs) {
 }
 
 // ---------------------------------------------------------------------------
+// Pellets — one at a time; every one you grab feeds the thing chasing you
+// ---------------------------------------------------------------------------
+let pellet = null; // {x, y}
+
+function dist(ax, ay, bx, by) {
+  return Math.abs(ax - bx) + Math.abs(ay - by);
+}
+
+// Pick a random free cell, preferring one clear of the player and snake
+// heads. Constraints relax if the board is too crowded to satisfy them.
+function spawnPellet() {
+  const candidates = [];
+  for (let y = 0; y < CONFIG.gridSize; y++) {
+    for (let x = 0; x < CONFIG.gridSize; x++) {
+      if (snakeOccupies(x, y)) continue;
+      if (x === player.x && y === player.y) continue;
+      candidates.push({ x, y });
+    }
+  }
+  if (candidates.length === 0) { pellet = null; return; }
+
+  const comfortable = candidates.filter(c =>
+    dist(c.x, c.y, player.x, player.y) >= CONFIG.pelletMinDistPlayer &&
+    snakes.every(s => dist(c.x, c.y, s.segments[0].x, s.segments[0].y) >= CONFIG.pelletMinDistSnakeHead)
+  );
+  const pool = comfortable.length ? comfortable : candidates;
+  pellet = { ...pool[Math.floor(Math.random() * pool.length)] };
+}
+
+function collectPellet() {
+  game.score += CONFIG.pelletScore;
+  hud.score.textContent = game.score;
+
+  // Your success feeds the enemy: +1 segment, a touch more speed
+  for (const snake of snakes) {
+    snake.pendingGrowth++;
+    snake.stepMs = Math.max(CONFIG.snakeStepMsFloor, snake.stepMs - CONFIG.snakeSpeedupMs);
+  }
+  spawnPellet();
+}
+
+// ---------------------------------------------------------------------------
 // Death — touching any snake segment, head or body
 // ---------------------------------------------------------------------------
 function checkDeath() {
   if (snakeOccupies(player.x, player.y)) {
     game.state = State.DEAD;
     game.diedAt = performance.now();
-    game.best = Math.max(game.best, game.score);
+    if (game.score > game.best) {
+      game.best = game.score;
+      try { localStorage.setItem("runFromSnake.best", String(game.best)); } catch {}
+    }
     hud.best.textContent = game.best;
   }
 }
@@ -286,6 +337,7 @@ function resetRun() {
   resetPlayer();
   snakes.length = 0;
   snakes.push(makeSnake(2, 2, CONFIG.snakeStartLength, CONFIG.snakeStepMs));
+  spawnPellet();
   game.state = State.PLAYING;
 }
 
@@ -331,10 +383,23 @@ function render() {
   if (game.state === State.TITLE) {
     drawTitle();
   } else {
+    drawPellet();
     for (const snake of snakes) drawSnake(snake);
     drawPlayer();
     if (game.state === State.DEAD) drawGameOver();
   }
+}
+
+function drawPellet() {
+  if (!pellet) return;
+  const cx = (pellet.x + 0.5) * CONFIG.cellPx;
+  const cy = (pellet.y + 0.5) * CONFIG.cellPx;
+  ctx.save();
+  ctx.fillStyle = "#ff4d5e";
+  ctx.beginPath();
+  ctx.arc(cx, cy, CONFIG.cellPx * 0.26, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
 
 // Interpolated pixel-center of an entity between its previous and current cell
@@ -470,6 +535,14 @@ window.addEventListener("keyup", (e) => {
 
 // Dropped keyups (e.g. alt-tab mid-hold) would leave the critter running
 window.addEventListener("blur", () => { heldDirs.length = 0; });
+
+// ---------------------------------------------------------------------------
+// Boot — restore the high score from previous sessions
+// ---------------------------------------------------------------------------
+try {
+  game.best = parseInt(localStorage.getItem("runFromSnake.best"), 10) || 0;
+} catch {}
+hud.best.textContent = game.best;
 
 requestAnimationFrame(frame);
 </script>
