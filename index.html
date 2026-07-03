@@ -82,6 +82,10 @@ const CONFIG = {
   goldenEveryMin: 6,         // golden pellet due every 6-10 normal pellets
   goldenEveryMax: 10,
   goldenLifetime: 6,         // seconds before it despawns
+  deathSlowmo: 0.15,         // time scale during the death cam
+  deathCamSecs: 0.8,         // real-time length of the death cam
+  nearMissShake: 4,          // px of screen shake when the head grazes you
+  deathShake: 10,
   deathInputLockMs: 400, // ignore restart keys briefly after death
 };
 
@@ -101,7 +105,7 @@ const hud = {
 // ---------------------------------------------------------------------------
 // Game state machine
 // ---------------------------------------------------------------------------
-const State = { TITLE: "title", PLAYING: "playing", DEAD: "dead" };
+const State = { TITLE: "title", PLAYING: "playing", DYING: "dying", DEAD: "dead" };
 
 const game = {
   state: State.TITLE,
@@ -110,6 +114,7 @@ const game = {
   pellets: 0,  // pellets eaten this run — drives all escalation
   time: 0,     // seconds of game time elapsed this run
   diedAt: 0,   // wall-clock ms of death, for restart input lockout
+  dyingTimer: 0, // real seconds elapsed in the death cam
   announce: null, // {text, until} — brief center-screen telegraph
 };
 
@@ -429,6 +434,7 @@ function collectPellet() {
   for (const snake of snakes) {
     snake.pendingGrowth++;
     snake.stepMs = Math.max(CONFIG.snakeStepMsFloor, snake.stepMs - CONFIG.snakeSpeedupMs);
+    snake.grewAt = game.time; // tail-snap flash
   }
 
   if (game.pellets === CONFIG.tier1Pellets) announce("the snake grows cunning");
@@ -467,14 +473,42 @@ function spawnSecondSnake() {
 // ---------------------------------------------------------------------------
 function checkDeath() {
   if (snakeOccupies(player.x, player.y)) {
-    game.state = State.DEAD;
-    game.diedAt = performance.now();
-    if (game.score > game.best) {
-      game.best = game.score;
-      try { localStorage.setItem("runFromSnake.best", String(game.best)); } catch {}
-    }
-    hud.best.textContent = game.best;
+    // Death cam: the world drops into slow-mo while the head slides in
+    game.state = State.DYING;
+    game.dyingTimer = 0;
+    addShake(CONFIG.deathShake);
+    return;
   }
+
+  // Near miss: any snake head within a king's move — flinch
+  for (const s of snakes) {
+    const h = s.segments[0];
+    if (Math.abs(h.x - player.x) <= 1 && Math.abs(h.y - player.y) <= 1 &&
+        game.time - lastNearMiss > 0.6) {
+      lastNearMiss = game.time;
+      addShake(CONFIG.nearMissShake);
+    }
+  }
+}
+
+function finishDying() {
+  game.state = State.DEAD;
+  game.diedAt = performance.now();
+  if (game.score > game.best) {
+    game.best = game.score;
+    try { localStorage.setItem("runFromSnake.best", String(game.best)); } catch {}
+  }
+  hud.best.textContent = game.best;
+}
+
+// ---------------------------------------------------------------------------
+// Screen shake — magnitude decays; render offsets the whole arena
+// ---------------------------------------------------------------------------
+let shakeMag = 0;
+let lastNearMiss = -1;
+
+function addShake(mag) {
+  shakeMag = Math.max(shakeMag, mag);
 }
 
 function resetRun() {
@@ -489,6 +523,8 @@ function resetRun() {
   golden = null;
   scheduleGolden();
   spawnPellet();
+  shakeMag = 0;
+  lastNearMiss = -1;
   game.state = State.PLAYING;
 }
 
@@ -514,6 +550,17 @@ function frame(now) {
 }
 
 function update(dt) {
+  shakeMag = Math.max(0, shakeMag - dt * 18);
+
+  if (game.state === State.DYING) {
+    // slow-mo: the snake finishes its bite while the clock crawls
+    game.dyingTimer += dt;
+    game.time += dt * CONFIG.deathSlowmo;
+    updateSnakes(dt * 1000 * CONFIG.deathSlowmo);
+    if (game.dyingTimer >= CONFIG.deathCamSecs) finishDying();
+    return;
+  }
+
   if (game.state !== State.PLAYING) return;
   game.time += dt;
   updatePlayer(dt * 1000);
@@ -530,6 +577,12 @@ function render() {
   ctx.fillStyle = css.getPropertyValue("--bg");
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+  ctx.save();
+  if (shakeMag > 0.1) {
+    ctx.translate((Math.random() - 0.5) * 2 * shakeMag,
+                  (Math.random() - 0.5) * 2 * shakeMag);
+  }
+
   drawGrid();
 
   if (game.state === State.TITLE) {
@@ -540,8 +593,10 @@ function render() {
     for (const snake of snakes) drawSnake(snake);
     drawPlayer();
     drawAnnouncement();
-    if (game.state === State.DEAD) drawGameOver();
   }
+  ctx.restore();
+
+  if (game.state === State.DEAD) drawGameOver();
 }
 
 function drawAnnouncement() {
@@ -563,6 +618,8 @@ function drawPellet() {
   const cy = (pellet.y + 0.5) * CONFIG.cellPx;
   ctx.save();
   ctx.fillStyle = "#ff4d5e";
+  ctx.shadowColor = "#ff4d5e";
+  ctx.shadowBlur = 10;
   ctx.beginPath();
   ctx.arc(cx, cy, CONFIG.cellPx * 0.26, 0, Math.PI * 2);
   ctx.fill();
@@ -578,6 +635,8 @@ function drawGolden() {
   const pulse = 1 + 0.18 * Math.sin(game.time * (remain < 2 ? 24 : 8));
   ctx.save();
   ctx.globalAlpha = remain < 2 ? 0.55 + 0.45 * Math.sin(game.time * 24) ** 2 : 1;
+  ctx.shadowColor = "#ffd23f";
+  ctx.shadowBlur = 14;
   ctx.fillStyle = "#ffd23f";
   ctx.beginPath();
   ctx.arc(cx, cy, CONFIG.cellPx * 0.3 * pulse, 0, Math.PI * 2);
@@ -620,16 +679,33 @@ function drawSnake(snake) {
     ctx.stroke();
   }
 
+  // Neon body with a brighter head; a freshly snapped-on tail segment
+  // flashes white so you watch your mistake grow
+  const snapAge = game.time - (snake.grewAt || -1);
+  ctx.shadowColor = "#39ff88";
   for (let i = snake.segments.length - 1; i >= 0; i--) {
     const cur = snake.segments[i];
     const prev = snake.prevSegments[i] || cur;
     const gx = prev.x + (cur.x - prev.x) * t;
     const gy = prev.y + (cur.y - prev.y) * t;
-    ctx.fillStyle = i === 0 ? "#7dffb0" : "#39ff88";
+    const isTail = i === snake.segments.length - 1;
+    let s = size;
+    if (i === 0) {
+      ctx.fillStyle = "#7dffb0";
+      ctx.shadowBlur = 18;
+    } else if (isTail && snapAge < 0.35) {
+      const k = 1 - snapAge / 0.35;
+      ctx.fillStyle = `rgb(${57 + 198 * k}, 255, ${136 + 119 * k})`;
+      ctx.shadowBlur = 12 + 18 * k;
+      s = size * (1 + 0.25 * k);
+    } else {
+      ctx.fillStyle = "#39ff88";
+      ctx.shadowBlur = 10;
+    }
     roundRect(
-      (gx + 0.5) * cell - size / 2,
-      (gy + 0.5) * cell - size / 2,
-      size, size, size * 0.3
+      (gx + 0.5) * cell - s / 2,
+      (gy + 0.5) * cell - s / 2,
+      s, s, s * 0.3
     );
   }
   ctx.restore();
@@ -652,9 +728,14 @@ function drawGameOver() {
   ctx.fillStyle = "#d8e0f0";
   ctx.font = "22px 'Segoe UI', system-ui, sans-serif";
   ctx.fillText(`score ${game.score}   best ${game.best}`, canvas.width / 2, canvas.height / 2 + 4);
+  if (game.score > 0 && game.score === game.best) {
+    ctx.fillStyle = "#ffd23f";
+    ctx.font = "600 19px 'Segoe UI', system-ui, sans-serif";
+    ctx.fillText("new best", canvas.width / 2, canvas.height / 2 + 36);
+  }
   ctx.fillStyle = "#5c6780";
   ctx.font = "17px 'Segoe UI', system-ui, sans-serif";
-  ctx.fillText("press any key to run again", canvas.width / 2, canvas.height / 2 + 40);
+  ctx.fillText("press any key to run again", canvas.width / 2, canvas.height / 2 + 68);
   ctx.restore();
 }
 
@@ -664,15 +745,26 @@ function drawPlayer() {
 
   ctx.save();
   ctx.fillStyle = "#ffd23f";
+  ctx.shadowColor = "#ffd23f";
+  ctx.shadowBlur = 10;
   ctx.beginPath();
   ctx.arc(x, y, r, 0, Math.PI * 2);
   ctx.fill();
+  ctx.shadowBlur = 0;
 
-  // Eyes sit perpendicular to the heading and look along it
+  // Eyes sit perpendicular to the heading; pupils track the nearest pellet
   const dir = currentDir() || DIRS.right;
+  const target = nearestPelletTo(player);
+  let lookX = dir.x * r * 0.22;
+  let lookY = dir.y * r * 0.22;
+  if (target) {
+    const dx = (target.x + 0.5) * CONFIG.cellPx - x;
+    const dy = (target.y + 0.5) * CONFIG.cellPx - y;
+    const len = Math.hypot(dx, dy) || 1;
+    lookX = (dx / len) * r * 0.22;
+    lookY = (dy / len) * r * 0.22;
+  }
   const eyeOffset = r * 0.42;
-  const lookX = dir.x * r * 0.22;
-  const lookY = dir.y * r * 0.22;
   ctx.fillStyle = "#14171f";
   const perp = { x: -dir.y, y: dir.x };
   for (const side of [-1, 1]) {
@@ -681,6 +773,15 @@ function drawPlayer() {
     ctx.fill();
   }
   ctx.restore();
+}
+
+function nearestPelletTo(p) {
+  const targets = [];
+  if (pellet) targets.push(pellet);
+  if (golden) targets.push(golden);
+  if (!targets.length) return null;
+  targets.sort((a, b) => dist(a.x, a.y, p.x, p.y) - dist(b.x, b.y, p.x, p.y));
+  return targets[0];
 }
 
 function drawGrid() {
