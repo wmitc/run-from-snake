@@ -21,41 +21,89 @@
   }
   body {
     display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 12px;
   }
-  #hud {
+  #layout {
     display: flex;
-    gap: 32px;
-    font-size: 18px;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    user-select: none;
+    align-items: center;
+    gap: 24px;
+    flex-wrap: wrap;
+    justify-content: center;
+    padding: 12px;
   }
-  #hud .value { color: var(--accent); font-weight: 700; }
   canvas {
     background: var(--bg);
     border: 1px solid #1d2433;
     border-radius: 6px;
-    max-width: min(92vw, 92vh);
-    max-height: min(92vw, 92vh);
+    max-width: min(94vw, 92vh);
+    max-height: min(94vw, 92vh);
+  }
+  #panel {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    min-width: 190px;
+    user-select: none;
+  }
+  #panel h1 {
+    font-size: 24px;
+    line-height: 1.15;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--accent);
+    text-shadow: 0 0 14px rgba(57, 255, 136, 0.45);
+  }
+  .stat label {
+    display: block;
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #5c6780;
+    margin-bottom: 2px;
+  }
+  .stat .value {
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 28px;
+    font-variant-numeric: tabular-nums;
+  }
+  #score { font-size: 44px; }
+  #powerup {
+    min-height: 20px;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
   }
   #hint {
     font-size: 13px;
     color: #5c6780;
-    user-select: none;
+    max-width: 190px;
   }
 </style>
 </head>
 <body>
-  <div id="hud">
-    <div>Score <span class="value" id="score">0</span></div>
-    <div>Best <span class="value" id="best">0</span></div>
+  <div id="layout">
+    <canvas id="game" width="720" height="720"></canvas>
+    <aside id="panel">
+      <h1>Run from<br>Snake</h1>
+      <div class="stat">
+        <label>Score</label>
+        <div class="value" id="score">0</div>
+      </div>
+      <div class="stat">
+        <label>Best</label>
+        <div class="value" id="best">0</div>
+      </div>
+      <div class="stat">
+        <label>Pellets</label>
+        <div class="value" id="pellets">0</div>
+      </div>
+      <div id="powerup"></div>
+      <div id="hint">WASD / arrows to move — you are the apple. Run.</div>
+    </aside>
   </div>
-  <canvas id="game" width="720" height="720"></canvas>
-  <div id="hint">WASD / arrows to move — you are the apple. Run.</div>
 
 <script>
 "use strict";
@@ -104,6 +152,8 @@ canvas.height = CONFIG.gridSize * CONFIG.cellPx;
 const hud = {
   score: document.getElementById("score"),
   best: document.getElementById("best"),
+  pellets: document.getElementById("pellets"),
+  powerup: document.getElementById("powerup"),
 };
 
 // ---------------------------------------------------------------------------
@@ -434,6 +484,7 @@ function collectPellet() {
   game.score += CONFIG.pelletScore;
   game.pellets++;
   hud.score.textContent = game.score;
+  hud.pellets.textContent = game.pellets;
   playPelletSfx();
 
   // Your success feeds the enemy: +1 segment, a touch more speed
@@ -659,6 +710,7 @@ function resetRun() {
   game.time = 0;
   game.announce = null;
   hud.score.textContent = "0";
+  hud.pellets.textContent = "0";
   resetPlayer();
   snakes.length = 0;
   snakes.push(makeSnake(2, 2, CONFIG.snakeStartLength, CONFIG.snakeStepMs));
