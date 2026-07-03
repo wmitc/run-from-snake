@@ -159,7 +159,7 @@ const hud = {
 // ---------------------------------------------------------------------------
 // Game state machine
 // ---------------------------------------------------------------------------
-const State = { TITLE: "title", PLAYING: "playing", DYING: "dying", DEAD: "dead" };
+const State = { TITLE: "title", PLAYING: "playing", PAUSED: "paused", DYING: "dying", DEAD: "dead" };
 
 const game = {
   state: State.TITLE,
@@ -683,6 +683,20 @@ function playDeathSting() {
   blip(midiToFreq(45), t + 0.44, 0.7, "square", 0.32);
 }
 
+// ---------------------------------------------------------------------------
+// Pause — P toggles; losing window focus pauses too. game.time freezes, so
+// every timer in the game (golden, effects, cooldowns) freezes with it.
+// ---------------------------------------------------------------------------
+function togglePause() {
+  if (game.state === State.PLAYING) {
+    game.state = State.PAUSED;
+    if (music.ctx) music.ctx.suspend();
+  } else if (game.state === State.PAUSED) {
+    game.state = State.PLAYING;
+    if (music.ctx) music.ctx.resume();
+  }
+}
+
 function toggleMute() {
   music.muted = !music.muted;
   if (music.master) music.master.gain.value = music.muted ? 0 : CONFIG.musicVolume;
@@ -691,7 +705,7 @@ function toggleMute() {
 }
 
 function hintText() {
-  return `WASD / arrows to move — M to ${music.muted ? "unmute" : "mute"}. You are the apple. Run.`;
+  return `WASD / arrows to move — P pauses, M ${music.muted ? "unmutes" : "mutes"}. You are the apple. Run.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -791,7 +805,22 @@ function render() {
   }
   ctx.restore();
 
+  if (game.state === State.PAUSED) drawPaused();
   if (game.state === State.DEAD) drawGameOver();
+}
+
+function drawPaused() {
+  ctx.save();
+  ctx.fillStyle = "rgba(11, 14, 20, 0.72)";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#d8e0f0";
+  ctx.font = "700 38px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText("PAUSED", canvas.width / 2, canvas.height / 2 - 8);
+  ctx.fillStyle = "#5c6780";
+  ctx.font = "17px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText("P to resume — the snake waits", canvas.width / 2, canvas.height / 2 + 28);
+  ctx.restore();
 }
 
 function drawAnnouncement() {
@@ -1015,6 +1044,11 @@ window.addEventListener("keydown", (e) => {
     toggleMute();
     return; // mute never starts or restarts a run
   }
+  if (e.code === "KeyP") {
+    togglePause();
+    return;
+  }
+  if (game.state === State.PAUSED) return; // everything else waits
   const dir = KEYMAP[e.code];
   if (dir) {
     e.preventDefault();
@@ -1035,8 +1069,12 @@ window.addEventListener("keyup", (e) => {
   if (i !== -1) heldDirs.splice(i, 1);
 });
 
-// Dropped keyups (e.g. alt-tab mid-hold) would leave the critter running
-window.addEventListener("blur", () => { heldDirs.length = 0; });
+// Dropped keyups (e.g. alt-tab mid-hold) would leave the critter running;
+// and a hunt you're not watching isn't a fair hunt — auto-pause
+window.addEventListener("blur", () => {
+  heldDirs.length = 0;
+  if (game.state === State.PLAYING) togglePause();
+});
 
 // ---------------------------------------------------------------------------
 // Boot — restore the high score from previous sessions
