@@ -131,6 +131,12 @@ const CONFIG = {
   goldenEveryMin: 6,         // golden pellet due every 6-10 normal pellets
   goldenEveryMax: 10,
   goldenLifetime: 6,         // seconds before it despawns
+  bonusEveryMin: 9,          // bonus pellet due every 9-14 normal pellets
+  bonusEveryMax: 14,
+  bonusLifetime: 8,          // seconds before it despawns
+  speedBoostStepMs: 80,      // boosted player step (normal is 110)
+  speedBoostDur: 5,          // seconds of boost
+  ghostDur: 4,               // seconds of invincibility
   deathSlowmo: 0.15,         // time scale during the death cam
   deathCamSecs: 0.8,         // real-time length of the death cam
   nearMissShake: 4,          // px of screen shake when the head grazes you
@@ -208,6 +214,8 @@ const player = {
   px: 0, py: 0,         // previous cell, for render interpolation
   stepTimer: 0,         // ms since last step
   moving: false,
+  speedUntil: 0,        // game.time until which the speed boost runs
+  ghostUntil: 0,        // game.time until which you're untouchable
 };
 
 function resetPlayer() {
@@ -217,18 +225,24 @@ function resetPlayer() {
   player.py = player.y;
   player.stepTimer = 0;
   player.moving = false;
+  player.speedUntil = 0;
+  player.ghostUntil = 0;
+}
+
+function playerStepMs() {
+  return speedActive() ? CONFIG.speedBoostStepMs : CONFIG.playerStepMs;
 }
 
 function updatePlayer(dtMs) {
   const dir = currentDir();
   player.stepTimer += dtMs;
-  if (player.stepTimer < CONFIG.playerStepMs) return;
+  if (player.stepTimer < playerStepMs()) return;
 
   if (!dir) {
     player.moving = false;
     player.px = player.x;
     player.py = player.y;
-    player.stepTimer = CONFIG.playerStepMs; // step instantly when input resumes
+    player.stepTimer = playerStepMs(); // step instantly when input resumes
     return;
   }
 
@@ -242,6 +256,7 @@ function updatePlayer(dtMs) {
     player.moving = true;
     if (pellet && pellet.x === player.x && pellet.y === player.y) collectPellet();
     if (golden && golden.x === player.x && golden.y === player.y) collectGolden();
+    if (bonus && bonus.x === player.x && bonus.y === player.y) collectBonus();
   } else {
     player.moving = false; // walls: stay put, keep facing
   }
@@ -504,6 +519,12 @@ function collectPellet() {
     if (golden) scheduleGolden();
   }
 
+  // bonus pellets run on their own, longer cadence
+  if (!bonus && game.pellets >= nextBonusAt) {
+    spawnBonus();
+    if (bonus) scheduleBonus();
+  }
+
   spawnPellet();
 }
 
@@ -524,9 +545,66 @@ function spawnSecondSnake() {
 }
 
 // ---------------------------------------------------------------------------
+// Bonus pellets — timed power-ups. Unlike everything else you eat, these
+// don't feed the snake; they're the relief valves.
+// ---------------------------------------------------------------------------
+const BONUS_TYPES = {
+  speed: { dur: 5, color: "#3fd8ff", label: "speed boost" },
+  ghost: { dur: 4, color: "#c07dff", label: "ghost" },
+};
+
+let bonus = null; // {type, x, y, expiresAt}
+let nextBonusAt = 0;
+
+function scheduleBonus() {
+  nextBonusAt = game.pellets + CONFIG.bonusEveryMin +
+    Math.floor(Math.random() * (CONFIG.bonusEveryMax - CONFIG.bonusEveryMin + 1));
+}
+
+function spawnBonus() {
+  const candidates = [];
+  for (let y = 0; y < CONFIG.gridSize; y++) {
+    for (let x = 0; x < CONFIG.gridSize; x++) {
+      if (snakeOccupies(x, y)) continue;
+      if (x === player.x && y === player.y) continue;
+      if (pellet && pellet.x === x && pellet.y === y) continue;
+      if (golden && golden.x === x && golden.y === y) continue;
+      if (dist(x, y, player.x, player.y) < 3) continue;
+      if (snakes.some(s => dist(x, y, s.segments[0].x, s.segments[0].y) < 4)) continue;
+      candidates.push({ x, y });
+    }
+  }
+  if (!candidates.length) return;
+  const cell = candidates[Math.floor(Math.random() * candidates.length)];
+  const type = Math.random() < 0.5 ? "speed" : "ghost";
+  bonus = { type, ...cell, expiresAt: game.time + CONFIG.bonusLifetime };
+}
+
+function updateBonus() {
+  if (bonus && game.time > bonus.expiresAt) bonus = null;
+}
+
+function speedActive() { return game.time < player.speedUntil; }
+function ghostActive() { return game.time < player.ghostUntil; }
+
+function collectBonus() {
+  const type = bonus.type;
+  bonus = null;
+  if (type === "speed") {
+    player.speedUntil = game.time + CONFIG.speedBoostDur;
+  } else {
+    player.ghostUntil = game.time + CONFIG.ghostDur;
+  }
+  announce(BONUS_TYPES[type].label + "!", 1.2);
+  playBonusSfx(type);
+}
+
+// ---------------------------------------------------------------------------
 // Death — touching any snake segment, head or body
 // ---------------------------------------------------------------------------
 function checkDeath() {
+  if (ghostActive()) return; // untouchable — walk right through the coils
+
   if (snakeOccupies(player.x, player.y)) {
     // Death cam: the world drops into slow-mo while the head slides in
     game.state = State.DYING;
@@ -547,6 +625,21 @@ function checkDeath() {
       playWhoosh();
     }
   }
+}
+
+// Side-panel power-up readout with a live countdown
+function updatePowerupHud() {
+  let text = "";
+  let color = "";
+  if (ghostActive()) {
+    text = `ghost ${(player.ghostUntil - game.time).toFixed(1)}s`;
+    color = BONUS_TYPES.ghost.color;
+  } else if (speedActive()) {
+    text = `speed ${(player.speedUntil - game.time).toFixed(1)}s`;
+    color = BONUS_TYPES.speed.color;
+  }
+  if (hud.powerup.textContent !== text) hud.powerup.textContent = text;
+  hud.powerup.style.color = color;
 }
 
 function finishDying() {
@@ -674,6 +767,21 @@ function playGoldenSfx() {
   blip(1319, t + 0.08, 0.38, "square", 0.28);
 }
 
+function playBonusSfx(type) {
+  if (!music.ctx) return;
+  const t = music.ctx.currentTime;
+  if (type === "speed") {
+    // fast rising triplet — gotta go fast
+    blip(523, t, 0.06, "square", 0.26);
+    blip(659, t + 0.05, 0.06, "square", 0.26);
+    blip(784, t + 0.10, 0.18, "square", 0.26);
+  } else {
+    // hollow slide — something just phased out of reality
+    blip(392, t, 0.3, "triangle", 0.4);
+    blip(554, t + 0.12, 0.4, "triangle", 0.35);
+  }
+}
+
 // Descending three-note sting as the head closes in
 function playDeathSting() {
   if (!music.ctx) return;
@@ -730,6 +838,8 @@ function resetRun() {
   snakes.push(makeSnake(2, 2, CONFIG.snakeStartLength, CONFIG.snakeStepMs));
   golden = null;
   scheduleGolden();
+  bonus = null;
+  scheduleBonus();
   spawnPellet();
   shakeMag = 0;
   lastNearMiss = -1;
@@ -775,7 +885,9 @@ function update(dt) {
   updatePlayer(dt * 1000);
   updateSnakes(dt * 1000);
   updateGolden();
+  updateBonus();
   checkDeath();
+  updatePowerupHud();
 }
 
 // ---------------------------------------------------------------------------
@@ -799,6 +911,7 @@ function render() {
   } else {
     drawPellet();
     drawGolden();
+    drawBonus();
     for (const snake of snakes) drawSnake(snake);
     drawPlayer();
     drawAnnouncement();
@@ -963,14 +1076,67 @@ function drawGameOver() {
   ctx.restore();
 }
 
-function drawPlayer() {
-  const { x, y } = lerpCenter(player);
-  const r = CONFIG.cellPx * 0.38;
+// Bonus pellets: speed is a cyan diamond, ghost a hollow violet ring —
+// both with the golden pellet's shrinking timer arc
+function drawBonus() {
+  if (!bonus) return;
+  const spec = BONUS_TYPES[bonus.type];
+  const cx = (bonus.x + 0.5) * CONFIG.cellPx;
+  const cy = (bonus.y + 0.5) * CONFIG.cellPx;
+  const remain = bonus.expiresAt - game.time;
+  const pulse = 1 + 0.15 * Math.sin(game.time * 8);
+  const r = CONFIG.cellPx * 0.3 * pulse;
 
   ctx.save();
-  ctx.fillStyle = "#ffd23f";
-  ctx.shadowColor = "#ffd23f";
-  ctx.shadowBlur = 10;
+  ctx.globalAlpha = remain < 2 ? 0.55 + 0.45 * Math.sin(game.time * 24) ** 2 : 1;
+  ctx.shadowColor = spec.color;
+  ctx.shadowBlur = 14;
+  if (bonus.type === "speed") {
+    ctx.fillStyle = spec.color;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - r);
+    ctx.lineTo(cx + r, cy);
+    ctx.lineTo(cx, cy + r);
+    ctx.lineTo(cx - r, cy);
+    ctx.closePath();
+    ctx.fill();
+  } else {
+    ctx.strokeStyle = spec.color;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 0.8, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = spec.color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(cx, cy, CONFIG.cellPx * 0.44, 0, Math.PI * 2 * Math.max(remain / CONFIG.bonusLifetime, 0));
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawPlayer() {
+  const { x, y } = lerpCenter(player, playerStepMs());
+  const r = CONFIG.cellPx * 0.38;
+
+  // Active effects restyle the critter: cyan streak when fast, translucent
+  // violet when untouchable (blinking as the effect runs out)
+  let bodyColor = "#ffd23f";
+  let alpha = 1;
+  if (ghostActive()) {
+    bodyColor = BONUS_TYPES.ghost.color;
+    const remain = player.ghostUntil - game.time;
+    alpha = remain < 1.2 ? 0.35 + 0.4 * Math.sin(game.time * 20) ** 2 : 0.65;
+  } else if (speedActive()) {
+    bodyColor = BONUS_TYPES.speed.color;
+  }
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = bodyColor;
+  ctx.shadowColor = bodyColor;
+  ctx.shadowBlur = ghostActive() || speedActive() ? 16 : 10;
   ctx.beginPath();
   ctx.arc(x, y, r, 0, Math.PI * 2);
   ctx.fill();
