@@ -68,6 +68,9 @@ const CONFIG = {
   cellPx: 30,            // canvas pixels per cell
   logicHz: 60,           // fixed logic updates per second
   playerStepMs: 110,     // ms per grid step while a direction is held
+  snakeStepMs: 200,      // starting ms per snake step (speeds up per pellet)
+  snakeStartLength: 4,
+  deathInputLockMs: 400, // ignore restart keys briefly after death
 };
 
 // ---------------------------------------------------------------------------
@@ -92,7 +95,8 @@ const game = {
   state: State.TITLE,
   score: 0,
   best: 0,
-  time: 0, // seconds of game time elapsed this run
+  time: 0,     // seconds of game time elapsed this run
+  diedAt: 0,   // wall-clock ms of death, for restart input lockout
 };
 
 // ---------------------------------------------------------------------------
@@ -169,10 +173,119 @@ function inBounds(x, y) {
   return x >= 0 && x < CONFIG.gridSize && y >= 0 && y < CONFIG.gridSize;
 }
 
+// ---------------------------------------------------------------------------
+// Snakes — head-first segment arrays. A snake never dies; when the player
+// walls it in with its own coils it "compresses": the tail retracts one cell
+// per stalled step and regrows after escape, so trapping buys time, not kills.
+// ---------------------------------------------------------------------------
+const snakes = [];
+
+function makeSnake(x, y, length, stepMs) {
+  const segments = [];
+  for (let i = 0; i < length; i++) segments.push({ x, y }); // uncoils as it moves
+  return {
+    segments,             // [0] is the head
+    prevSegments: segments.map(s => ({ ...s })),
+    dir: { x: 1, y: 0 },
+    stepMs,
+    stepTimer: 0,
+    pendingGrowth: 0,
+  };
+}
+
+function snakeOccupies(x, y) {
+  return snakes.some(s => s.segments.some(seg => seg.x === x && seg.y === y));
+}
+
+// Cells a snake head may enter: in bounds and not covered by any snake body.
+// Each snake's own tail tip counts as free because it vacates on the same step.
+function isCellFreeForSnake(snake, x, y) {
+  if (!inBounds(x, y)) return false;
+  for (const s of snakes) {
+    const body = s.segments;
+    const skipTail = s === snake && s.pendingGrowth === 0;
+    const limit = skipTail ? body.length - 1 : body.length;
+    for (let i = 0; i < limit; i++) {
+      if (body[i].x === x && body[i].y === y) return false;
+    }
+  }
+  return true;
+}
+
+// Greedy chase: step to the legal neighbor closest (Manhattan) to the player,
+// preferring the current heading on ties so the snake commits to lines.
+function chooseSnakeMove(snake) {
+  const head = snake.segments[0];
+  let best = null;
+  let bestDist = Infinity;
+  for (const name of ["up", "down", "left", "right"]) {
+    const d = DIRS[name];
+    const nx = head.x + d.x;
+    const ny = head.y + d.y;
+    if (!isCellFreeForSnake(snake, nx, ny)) continue;
+    const dist = Math.abs(nx - player.x) + Math.abs(ny - player.y);
+    const straight = d.x === snake.dir.x && d.y === snake.dir.y;
+    if (dist < bestDist || (dist === bestDist && straight)) {
+      bestDist = dist;
+      best = d;
+    }
+  }
+  return best; // null = fully blocked
+}
+
+function stepSnake(snake) {
+  snake.prevSegments = snake.segments.map(s => ({ ...s }));
+  const move = chooseSnakeMove(snake);
+
+  if (!move) {
+    // Trapped in its own coils: compress. Tail retracts; length owed back.
+    if (snake.segments.length > 1) {
+      snake.segments.pop();
+      snake.prevSegments.pop();
+      snake.pendingGrowth++;
+    }
+    return;
+  }
+
+  snake.dir = move;
+  const head = snake.segments[0];
+  snake.segments.unshift({ x: head.x + move.x, y: head.y + move.y });
+  if (snake.pendingGrowth > 0) {
+    snake.pendingGrowth--; // keep the tail: regrow one owed segment
+  } else {
+    snake.segments.pop();
+  }
+}
+
+function updateSnakes(dtMs) {
+  for (const snake of snakes) {
+    snake.stepTimer += dtMs;
+    while (snake.stepTimer >= snake.stepMs) {
+      snake.stepTimer -= snake.stepMs;
+      stepSnake(snake);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Death — touching any snake segment, head or body
+// ---------------------------------------------------------------------------
+function checkDeath() {
+  if (snakeOccupies(player.x, player.y)) {
+    game.state = State.DEAD;
+    game.diedAt = performance.now();
+    game.best = Math.max(game.best, game.score);
+    hud.best.textContent = game.best;
+  }
+}
+
 function resetRun() {
   game.score = 0;
   game.time = 0;
+  hud.score.textContent = "0";
   resetPlayer();
+  snakes.length = 0;
+  snakes.push(makeSnake(2, 2, CONFIG.snakeStartLength, CONFIG.snakeStepMs));
   game.state = State.PLAYING;
 }
 
@@ -201,6 +314,8 @@ function update(dt) {
   if (game.state !== State.PLAYING) return;
   game.time += dt;
   updatePlayer(dt * 1000);
+  updateSnakes(dt * 1000);
+  checkDeath();
 }
 
 // ---------------------------------------------------------------------------
@@ -216,19 +331,65 @@ function render() {
   if (game.state === State.TITLE) {
     drawTitle();
   } else {
+    for (const snake of snakes) drawSnake(snake);
     drawPlayer();
+    if (game.state === State.DEAD) drawGameOver();
   }
 }
 
 // Interpolated pixel-center of an entity between its previous and current cell
-function lerpCenter(e) {
-  const t = Math.min(e.stepTimer / CONFIG.playerStepMs, 1);
+function lerpCenter(e, stepMs = CONFIG.playerStepMs) {
+  const t = Math.min(e.stepTimer / stepMs, 1);
   const gx = e.px + (e.x - e.px) * t;
   const gy = e.py + (e.y - e.py) * t;
   return {
     x: (gx + 0.5) * CONFIG.cellPx,
     y: (gy + 0.5) * CONFIG.cellPx,
   };
+}
+
+function drawSnake(snake) {
+  const t = Math.min(snake.stepTimer / snake.stepMs, 1);
+  const cell = CONFIG.cellPx;
+  const size = cell * 0.86;
+
+  ctx.save();
+  for (let i = snake.segments.length - 1; i >= 0; i--) {
+    const cur = snake.segments[i];
+    const prev = snake.prevSegments[i] || cur;
+    const gx = prev.x + (cur.x - prev.x) * t;
+    const gy = prev.y + (cur.y - prev.y) * t;
+    ctx.fillStyle = i === 0 ? "#7dffb0" : "#39ff88";
+    roundRect(
+      (gx + 0.5) * cell - size / 2,
+      (gy + 0.5) * cell - size / 2,
+      size, size, size * 0.3
+    );
+  }
+  ctx.restore();
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+  ctx.fill();
+}
+
+function drawGameOver() {
+  ctx.save();
+  ctx.fillStyle = "rgba(11, 14, 20, 0.72)";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#ff4d5e";
+  ctx.font = "700 46px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText("EATEN", canvas.width / 2, canvas.height / 2 - 40);
+  ctx.fillStyle = "#d8e0f0";
+  ctx.font = "22px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText(`score ${game.score}   best ${game.best}`, canvas.width / 2, canvas.height / 2 + 4);
+  ctx.fillStyle = "#5c6780";
+  ctx.font = "17px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText("press any key to run again", canvas.width / 2, canvas.height / 2 + 40);
+  ctx.restore();
 }
 
 function drawPlayer() {
@@ -292,7 +453,12 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     if (!heldDirs.includes(dir)) heldDirs.push(dir);
   }
-  if (game.state === State.TITLE) resetRun();
+  if (game.state === State.TITLE) {
+    resetRun();
+  } else if (game.state === State.DEAD &&
+             performance.now() - game.diedAt > CONFIG.deathInputLockMs) {
+    resetRun(); // instant restart, high score staring at you
+  }
 });
 
 window.addEventListener("keyup", (e) => {
