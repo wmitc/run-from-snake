@@ -78,6 +78,10 @@ const CONFIG = {
   tier1Pellets: 10,          // snake starts mixing in BFS lookahead
   tier2Pellets: 20,          // BFS most moves
   secondSnakePellets: 30,    // a second, shorter snake joins the hunt
+  goldenScore: 50,           // 5x — the greed tax
+  goldenEveryMin: 6,         // golden pellet due every 6-10 normal pellets
+  goldenEveryMax: 10,
+  goldenLifetime: 6,         // seconds before it despawns
   deathInputLockMs: 400, // ignore restart keys briefly after death
 };
 
@@ -178,6 +182,7 @@ function updatePlayer(dtMs) {
     player.y = ny;
     player.moving = true;
     if (pellet && pellet.x === player.x && pellet.y === player.y) collectPellet();
+    if (golden && golden.x === player.x && golden.y === player.y) collectGolden();
   } else {
     player.moving = false; // walls: stay put, keep facing
   }
@@ -369,6 +374,52 @@ function spawnPellet() {
   pellet = { ...pool[Math.floor(Math.random() * pool.length)] };
 }
 
+// ---------------------------------------------------------------------------
+// Golden pellet — worth 5x, always spawns in the snake's shadow, always
+// skippable, always tempting. Pure greed reward: it does NOT grow the snake.
+// ---------------------------------------------------------------------------
+let golden = null; // {x, y, expiresAt}
+let nextGoldenAt = 0; // pellet count that summons the next one
+
+function scheduleGolden() {
+  nextGoldenAt = game.pellets + CONFIG.goldenEveryMin +
+    Math.floor(Math.random() * (CONFIG.goldenEveryMax - CONFIG.goldenEveryMin + 1));
+}
+
+// Free cells hugging the snake's body; "pocket" cells (2+ snake neighbors,
+// i.e. half-enclosed by coils) are preferred — maximum temptation.
+function spawnGolden() {
+  const adjacent = [];
+  const pockets = [];
+  for (let y = 0; y < CONFIG.gridSize; y++) {
+    for (let x = 0; x < CONFIG.gridSize; x++) {
+      if (snakeOccupies(x, y)) continue;
+      if (x === player.x && y === player.y) continue;
+      if (pellet && pellet.x === x && pellet.y === y) continue;
+      let snakeNeighbors = 0;
+      for (const d of Object.values(DIRS)) {
+        if (snakeOccupies(x + d.x, y + d.y)) snakeNeighbors++;
+      }
+      if (snakeNeighbors >= 2) pockets.push({ x, y });
+      else if (snakeNeighbors === 1) adjacent.push({ x, y });
+    }
+  }
+  const pool = pockets.length ? pockets : adjacent;
+  if (!pool.length) return; // snake too tidy right now; try again next pellet
+  const cell = pool[Math.floor(Math.random() * pool.length)];
+  golden = { ...cell, expiresAt: game.time + CONFIG.goldenLifetime };
+}
+
+function updateGolden() {
+  if (golden && game.time > golden.expiresAt) golden = null; // chickened out
+}
+
+function collectGolden() {
+  game.score += CONFIG.goldenScore;
+  hud.score.textContent = game.score;
+  golden = null;
+}
+
 function collectPellet() {
   game.score += CONFIG.pelletScore;
   game.pellets++;
@@ -383,6 +434,12 @@ function collectPellet() {
   if (game.pellets === CONFIG.tier1Pellets) announce("the snake grows cunning");
   if (game.pellets === CONFIG.tier2Pellets) announce("it sees your paths");
   if (game.pellets === CONFIG.secondSnakePellets) spawnSecondSnake();
+
+  // a golden pellet comes due every few pellets; retries if placement failed
+  if (!golden && game.pellets >= nextGoldenAt) {
+    spawnGolden();
+    if (golden) scheduleGolden();
+  }
 
   spawnPellet();
 }
@@ -429,6 +486,8 @@ function resetRun() {
   resetPlayer();
   snakes.length = 0;
   snakes.push(makeSnake(2, 2, CONFIG.snakeStartLength, CONFIG.snakeStepMs));
+  golden = null;
+  scheduleGolden();
   spawnPellet();
   game.state = State.PLAYING;
 }
@@ -459,6 +518,7 @@ function update(dt) {
   game.time += dt;
   updatePlayer(dt * 1000);
   updateSnakes(dt * 1000);
+  updateGolden();
   checkDeath();
 }
 
@@ -476,6 +536,7 @@ function render() {
     drawTitle();
   } else {
     drawPellet();
+    drawGolden();
     for (const snake of snakes) drawSnake(snake);
     drawPlayer();
     drawAnnouncement();
@@ -505,6 +566,27 @@ function drawPellet() {
   ctx.beginPath();
   ctx.arc(cx, cy, CONFIG.cellPx * 0.26, 0, Math.PI * 2);
   ctx.fill();
+  ctx.restore();
+}
+
+function drawGolden() {
+  if (!golden) return;
+  const cx = (golden.x + 0.5) * CONFIG.cellPx;
+  const cy = (golden.y + 0.5) * CONFIG.cellPx;
+  const remain = golden.expiresAt - game.time;
+  // pulse speeds up as time runs out — an audible clock, visually
+  const pulse = 1 + 0.18 * Math.sin(game.time * (remain < 2 ? 24 : 8));
+  ctx.save();
+  ctx.globalAlpha = remain < 2 ? 0.55 + 0.45 * Math.sin(game.time * 24) ** 2 : 1;
+  ctx.fillStyle = "#ffd23f";
+  ctx.beginPath();
+  ctx.arc(cx, cy, CONFIG.cellPx * 0.3 * pulse, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "#fff2b0";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(cx, cy, CONFIG.cellPx * 0.42, 0, Math.PI * 2 * Math.max(remain / CONFIG.goldenLifetime, 0));
+  ctx.stroke();
   ctx.restore();
 }
 
