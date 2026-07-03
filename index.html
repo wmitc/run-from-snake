@@ -493,6 +493,7 @@ function checkDeath() {
         game.time - lastNearMiss > 0.6) {
       lastNearMiss = game.time;
       addShake(CONFIG.nearMissShake);
+      playWhoosh();
     }
   }
 }
@@ -580,6 +581,30 @@ function stopMusic() {
     clearInterval(music.timer);
     music.timer = null;
   }
+}
+
+// Near-miss whoosh: a burst of filtered noise sweeping down — air displaced
+// by a head that almost had you
+function playWhoosh() {
+  if (!music.ctx) return;
+  const ctx = music.ctx;
+  const t = ctx.currentTime;
+  const dur = 0.18;
+  const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  const bp = ctx.createBiquadFilter();
+  bp.type = "bandpass";
+  bp.Q.value = 1.2;
+  bp.frequency.setValueAtTime(1600, t);
+  bp.frequency.exponentialRampToValueAtTime(350, t + dur);
+  const env = ctx.createGain();
+  env.gain.setValueAtTime(0.5, t);
+  env.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  src.connect(bp).connect(env).connect(music.master);
+  src.start(t);
 }
 
 // Pickup sounds — routed through the master gain, so M mutes them too
