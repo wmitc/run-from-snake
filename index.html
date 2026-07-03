@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run From Snake</title>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --grid-line: #151a24;
+    --text: #d8e0f0;
+    --accent: #39ff88;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", system-ui, sans-serif;
+    overflow: hidden;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+  }
+  #hud {
+    display: flex;
+    gap: 32px;
+    font-size: 18px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    user-select: none;
+  }
+  #hud .value { color: var(--accent); font-weight: 700; }
+  canvas {
+    background: var(--bg);
+    border: 1px solid #1d2433;
+    border-radius: 6px;
+    max-width: min(92vw, 92vh);
+    max-height: min(92vw, 92vh);
+  }
+  #hint {
+    font-size: 13px;
+    color: #5c6780;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+  <div id="hud">
+    <div>Score <span class="value" id="score">0</span></div>
+    <div>Best <span class="value" id="best">0</span></div>
+  </div>
+  <canvas id="game" width="720" height="720"></canvas>
+  <div id="hint">WASD / arrows to move — you are the apple. Run.</div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// Config — all tuning knobs live here
+// ---------------------------------------------------------------------------
+const CONFIG = {
+  gridSize: 24,          // cells per side
+  cellPx: 30,            // canvas pixels per cell
+  logicHz: 60,           // fixed logic updates per second
+};
+
+// ---------------------------------------------------------------------------
+// Canvas setup
+// ---------------------------------------------------------------------------
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+canvas.width = CONFIG.gridSize * CONFIG.cellPx;
+canvas.height = CONFIG.gridSize * CONFIG.cellPx;
+
+const hud = {
+  score: document.getElementById("score"),
+  best: document.getElementById("best"),
+};
+
+// ---------------------------------------------------------------------------
+// Game state machine
+// ---------------------------------------------------------------------------
+const State = { TITLE: "title", PLAYING: "playing", DEAD: "dead" };
+
+const game = {
+  state: State.TITLE,
+  score: 0,
+  best: 0,
+  time: 0, // seconds of game time elapsed this run
+};
+
+function resetRun() {
+  game.score = 0;
+  game.time = 0;
+  game.state = State.PLAYING;
+}
+
+// ---------------------------------------------------------------------------
+// Fixed-timestep game loop
+// ---------------------------------------------------------------------------
+const STEP = 1 / CONFIG.logicHz;
+let lastTime = performance.now();
+let accumulator = 0;
+
+function frame(now) {
+  let dt = (now - lastTime) / 1000;
+  lastTime = now;
+  dt = Math.min(dt, 0.25); // clamp huge tab-switch deltas
+
+  accumulator += dt;
+  while (accumulator >= STEP) {
+    update(STEP);
+    accumulator -= STEP;
+  }
+  render();
+  requestAnimationFrame(frame);
+}
+
+function update(dt) {
+  if (game.state !== State.PLAYING) return;
+  game.time += dt;
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+function render() {
+  const css = getComputedStyle(document.documentElement);
+  ctx.fillStyle = css.getPropertyValue("--bg");
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  drawGrid();
+
+  if (game.state === State.TITLE) drawTitle();
+}
+
+function drawGrid() {
+  const { gridSize, cellPx } = CONFIG;
+  ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--grid-line");
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = 1; i < gridSize; i++) {
+    const p = i * cellPx + 0.5;
+    ctx.moveTo(p, 0);
+    ctx.lineTo(p, canvas.height);
+    ctx.moveTo(0, p);
+    ctx.lineTo(canvas.width, p);
+  }
+  ctx.stroke();
+}
+
+function drawTitle() {
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#d8e0f0";
+  ctx.font = "700 42px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillText("RUN FROM SNAKE", canvas.width / 2, canvas.height / 2 - 20);
+  ctx.font = "18px 'Segoe UI', system-ui, sans-serif";
+  ctx.fillStyle = "#5c6780";
+  ctx.fillText("press any key to start", canvas.width / 2, canvas.height / 2 + 24);
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------------------
+// Input — start the run from the title screen
+// ---------------------------------------------------------------------------
+window.addEventListener("keydown", (e) => {
+  if (game.state === State.TITLE) resetRun();
+});
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
