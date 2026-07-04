@@ -137,6 +137,8 @@ const CONFIG = {
   speedBoostStepMs: 80,      // boosted player step (normal is 110)
   speedBoostDur: 5,          // seconds of boost
   ghostDur: 4,               // seconds of invincibility
+  freezeDur: 2.5,            // seconds all snakes stand still
+  shrinkSegments: 3,         // segments each snake loses to a shrink pellet
   deathSlowmo: 0.15,         // time scale during the death cam
   deathCamSecs: 0.8,         // real-time length of the death cam
   nearMissShake: 4,          // px of screen shake when the head grazes you
@@ -175,6 +177,7 @@ const game = {
   time: 0,     // seconds of game time elapsed this run
   diedAt: 0,   // wall-clock ms of death, for restart input lockout
   dyingTimer: 0, // real seconds elapsed in the death cam
+  freezeUntil: 0, // game.time until which all snakes stand still
   announce: null, // {text, until} — brief center-screen telegraph
 };
 
@@ -409,6 +412,7 @@ function stepSnake(snake) {
 }
 
 function updateSnakes(dtMs) {
+  if (freezeActive()) return; // step timers hold; they thaw mid-stride
   for (const snake of snakes) {
     snake.stepTimer += dtMs;
     while (snake.stepTimer >= snake.stepMs) {
@@ -435,6 +439,8 @@ function spawnPellet() {
     for (let x = 0; x < CONFIG.gridSize; x++) {
       if (snakeOccupies(x, y)) continue;
       if (x === player.x && y === player.y) continue;
+      if (golden && golden.x === x && golden.y === y) continue;
+      if (bonus && bonus.x === x && bonus.y === y) continue;
       candidates.push({ x, y });
     }
   }
@@ -470,6 +476,7 @@ function spawnGolden() {
       if (snakeOccupies(x, y)) continue;
       if (x === player.x && y === player.y) continue;
       if (pellet && pellet.x === x && pellet.y === y) continue;
+      if (bonus && bonus.x === x && bonus.y === y) continue;
       let snakeNeighbors = 0;
       for (const d of Object.values(DIRS)) {
         if (snakeOccupies(x + d.x, y + d.y)) snakeNeighbors++;
@@ -549,9 +556,21 @@ function spawnSecondSnake() {
 // don't feed the snake; they're the relief valves.
 // ---------------------------------------------------------------------------
 const BONUS_TYPES = {
-  speed: { dur: 5, color: "#3fd8ff", label: "speed boost" },
-  ghost: { dur: 4, color: "#c07dff", label: "ghost" },
+  speed:  { color: "#3fd8ff", label: "speed boost" },
+  ghost:  { color: "#c07dff", label: "ghost" },
+  freeze: { color: "#d9f2ff", label: "freeze" },
+  shrink: { color: "#ff9f40", label: "shrink" },
 };
+
+// Weighted pick: shrink is the only thing that undoes your mistakes, so
+// it's the rarest
+function rollBonusType() {
+  const r = Math.random();
+  if (r < 0.30) return "speed";
+  if (r < 0.60) return "ghost";
+  if (r < 0.85) return "freeze";
+  return "shrink";
+}
 
 let bonus = null; // {type, x, y, expiresAt}
 let nextBonusAt = 0;
@@ -576,8 +595,7 @@ function spawnBonus() {
   }
   if (!candidates.length) return;
   const cell = candidates[Math.floor(Math.random() * candidates.length)];
-  const type = Math.random() < 0.5 ? "speed" : "ghost";
-  bonus = { type, ...cell, expiresAt: game.time + CONFIG.bonusLifetime };
+  bonus = { type: rollBonusType(), ...cell, expiresAt: game.time + CONFIG.bonusLifetime };
 }
 
 function updateBonus() {
@@ -586,17 +604,37 @@ function updateBonus() {
 
 function speedActive() { return game.time < player.speedUntil; }
 function ghostActive() { return game.time < player.ghostUntil; }
+function freezeActive() { return game.time < game.freezeUntil; }
 
 function collectBonus() {
   const type = bonus.type;
   bonus = null;
   if (type === "speed") {
     player.speedUntil = game.time + CONFIG.speedBoostDur;
-  } else {
+  } else if (type === "ghost") {
     player.ghostUntil = game.time + CONFIG.ghostDur;
+  } else if (type === "freeze") {
+    game.freezeUntil = game.time + CONFIG.freezeDur;
+  } else if (type === "shrink") {
+    shrinkSnakes();
   }
   announce(BONUS_TYPES[type].label + "!", 1.2);
   playBonusSfx(type);
+}
+
+// The one mercy in the game: every snake sheds segments, no score price.
+// Owed growth is cancelled before real segments come off.
+function shrinkSnakes() {
+  for (const snake of snakes) {
+    let toRemove = CONFIG.shrinkSegments;
+    const cancelled = Math.min(toRemove, snake.pendingGrowth);
+    snake.pendingGrowth -= cancelled;
+    toRemove -= cancelled;
+    while (toRemove-- > 0 && snake.segments.length > 2) {
+      snake.segments.pop();
+      snake.prevSegments.pop();
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -634,6 +672,9 @@ function updatePowerupHud() {
   if (ghostActive()) {
     text = `ghost ${(player.ghostUntil - game.time).toFixed(1)}s`;
     color = BONUS_TYPES.ghost.color;
+  } else if (freezeActive()) {
+    text = `freeze ${(game.freezeUntil - game.time).toFixed(1)}s`;
+    color = BONUS_TYPES.freeze.color;
   } else if (speedActive()) {
     text = `speed ${(player.speedUntil - game.time).toFixed(1)}s`;
     color = BONUS_TYPES.speed.color;
@@ -775,10 +816,20 @@ function playBonusSfx(type) {
     blip(523, t, 0.06, "square", 0.26);
     blip(659, t + 0.05, 0.06, "square", 0.26);
     blip(784, t + 0.10, 0.18, "square", 0.26);
-  } else {
+  } else if (type === "ghost") {
     // hollow slide — something just phased out of reality
     blip(392, t, 0.3, "triangle", 0.4);
     blip(554, t + 0.12, 0.4, "triangle", 0.35);
+  } else if (type === "freeze") {
+    // high glassy shimmer — everything crystallizes
+    blip(1568, t, 0.12, "triangle", 0.35);
+    blip(2093, t + 0.08, 0.16, "triangle", 0.3);
+    blip(2637, t + 0.16, 0.28, "triangle", 0.25);
+  } else {
+    // descending pop-pop-pop — segments falling off
+    blip(660, t, 0.08, "square", 0.26);
+    blip(494, t + 0.09, 0.08, "square", 0.26);
+    blip(330, t + 0.18, 0.16, "square", 0.26);
   }
 }
 
@@ -831,6 +882,7 @@ function resetRun() {
   game.pellets = 0;
   game.time = 0;
   game.announce = null;
+  game.freezeUntil = 0;
   hud.score.textContent = "0";
   hud.pellets.textContent = "0";
   resetPlayer();
@@ -1017,9 +1069,10 @@ function drawSnake(snake) {
   }
 
   // Neon body with a brighter head; a freshly snapped-on tail segment
-  // flashes white so you watch your mistake grow
+  // flashes white so you watch your mistake grow. Frozen snakes go icy.
+  const frozen = freezeActive();
   const snapAge = game.time - (snake.grewAt || -1);
-  ctx.shadowColor = "#39ff88";
+  ctx.shadowColor = frozen ? "#bfe8ff" : "#39ff88";
   for (let i = snake.segments.length - 1; i >= 0; i--) {
     const cur = snake.segments[i];
     const prev = snake.prevSegments[i] || cur;
@@ -1027,7 +1080,10 @@ function drawSnake(snake) {
     const gy = prev.y + (cur.y - prev.y) * t;
     const isTail = i === snake.segments.length - 1;
     let s = size;
-    if (i === 0) {
+    if (frozen) {
+      ctx.fillStyle = i === 0 ? "#e4f6ff" : "#9fd8f5";
+      ctx.shadowBlur = i === 0 ? 18 : 10;
+    } else if (i === 0) {
       ctx.fillStyle = "#7dffb0";
       ctx.shadowBlur = 18;
     } else if (isTail && snapAge < 0.35) {
@@ -1092,6 +1148,7 @@ function drawBonus() {
   ctx.shadowColor = spec.color;
   ctx.shadowBlur = 14;
   if (bonus.type === "speed") {
+    // cyan diamond
     ctx.fillStyle = spec.color;
     ctx.beginPath();
     ctx.moveTo(cx, cy - r);
@@ -1100,12 +1157,33 @@ function drawBonus() {
     ctx.lineTo(cx - r, cy);
     ctx.closePath();
     ctx.fill();
-  } else {
+  } else if (bonus.type === "ghost") {
+    // violet ring
     ctx.strokeStyle = spec.color;
     ctx.lineWidth = 4;
     ctx.beginPath();
     ctx.arc(cx, cy, r * 0.8, 0, Math.PI * 2);
     ctx.stroke();
+  } else if (bonus.type === "freeze") {
+    // six-spoke ice crystal
+    ctx.strokeStyle = spec.color;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    for (let k = 0; k < 3; k++) {
+      const a = game.time * 0.8 + (k * Math.PI) / 3;
+      ctx.moveTo(cx - Math.cos(a) * r, cy - Math.sin(a) * r);
+      ctx.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+    }
+    ctx.stroke();
+  } else {
+    // orange down-triangle — the snake gets smaller
+    ctx.fillStyle = spec.color;
+    ctx.beginPath();
+    ctx.moveTo(cx - r, cy - r * 0.7);
+    ctx.lineTo(cx + r, cy - r * 0.7);
+    ctx.lineTo(cx, cy + r);
+    ctx.closePath();
+    ctx.fill();
   }
   ctx.shadowBlur = 0;
   ctx.strokeStyle = spec.color;
