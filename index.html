@@ -439,6 +439,8 @@ function spawnPellet() {
     for (let x = 0; x < CONFIG.gridSize; x++) {
       if (snakeOccupies(x, y)) continue;
       if (x === player.x && y === player.y) continue;
+      if (golden && golden.x === x && golden.y === y) continue;
+      if (bonus && bonus.x === x && bonus.y === y) continue;
       candidates.push({ x, y });
     }
   }
@@ -474,6 +476,7 @@ function spawnGolden() {
       if (snakeOccupies(x, y)) continue;
       if (x === player.x && y === player.y) continue;
       if (pellet && pellet.x === x && pellet.y === y) continue;
+      if (bonus && bonus.x === x && bonus.y === y) continue;
       let snakeNeighbors = 0;
       for (const d of Object.values(DIRS)) {
         if (snakeOccupies(x + d.x, y + d.y)) snakeNeighbors++;
