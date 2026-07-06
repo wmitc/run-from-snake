@@ -24,3 +24,17 @@ Open `index.html` in any browser. No build, no dependencies, one file.
 
 You're slightly faster than the snake and can turn instantly while it commits to its
 path. Bait it into corners. Use its body as a wall. Steer your enemy.
+
+## Escalation
+
+The snake gets smarter as you score, and each upgrade is announced on screen:
+
+- **10 pellets — "the snake grows cunning":** until now the snake is purely
+  greedy — it steps straight toward you and gets stuck behind its own body,
+  so it's easy to fake out. From here, every other move uses real pathfinding
+  (BFS) that routes around obstacles.
+- **15 pellets — "another one.":** a second, shorter snake joins the hunt. It
+  stays permanently greedy and starts a bit slower than the veteran.
+- **20 pellets — "it sees your paths":** pathfinding becomes the default — 3
+  of every 4 moves take the true shortest path around walls and its own
+  coils. Only the remaining greedy moves can still be juked, briefly.
