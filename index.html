@@ -54,7 +54,7 @@
     color: var(--accent);
     text-shadow: 0 0 14px rgba(57, 255, 136, 0.45);
   }
-  .stat label {
+  .stat label, #legend > label {
     display: block;
     font-size: 12px;
     letter-spacing: 0.14em;
@@ -62,6 +62,20 @@
     color: #5c6780;
     margin-bottom: 2px;
   }
+  #legend-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .legend-row {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 12.5px;
+    color: #8a95ad;
+    max-width: 210px;
+  }
+  .legend-row canvas { flex: none; }
   .stat .value {
     color: var(--accent);
     font-weight: 700;
@@ -101,6 +115,10 @@
         <div class="value" id="pellets">0</div>
       </div>
       <div id="powerup"></div>
+      <div id="legend">
+        <label>Key</label>
+        <div id="legend-rows"></div>
+      </div>
       <div id="hint">WASD / arrows to move — you are the apple. Run.</div>
     </aside>
   </div>
@@ -1319,6 +1337,43 @@ window.addEventListener("blur", () => {
   heldDirs.length = 0;
   if (game.state === State.PLAYING) togglePause();
 });
+
+// ---------------------------------------------------------------------------
+// Side-panel key — one row per thing you can eat. Icons are rendered by the
+// game's own drawing code onto tiny canvases, so they always match the arena.
+// ---------------------------------------------------------------------------
+function buildLegend() {
+  const rows = [
+    { icon: g => { g.shadowColor = g.fillStyle = "#ff4d5e"; g.beginPath(); g.arc(11, 11, 6, 0, Math.PI * 2); g.fill(); },
+      text: `pellet — +${CONFIG.pelletScore}, feeds the snake` },
+    { icon: g => { g.shadowColor = g.fillStyle = "#ffd23f"; g.beginPath(); g.arc(11, 11, 7, 0, Math.PI * 2); g.fill(); },
+      text: `golden — +${CONFIG.goldenScore}, vanishes fast` },
+    { type: "speed",  text: `speed boost — you, for ${CONFIG.speedBoostDur}s` },
+    { type: "ghost",  text: `ghost — untouchable for ${CONFIG.ghostDur}s` },
+    { type: "freeze", text: `freeze — snakes halt for ${CONFIG.freezeDur}s` },
+    { type: "slow",   text: `slow — snakes at half pace for ${CONFIG.slowDur}s` },
+  ];
+  const box = document.getElementById("legend-rows");
+  for (const row of rows) {
+    const div = document.createElement("div");
+    div.className = "legend-row";
+    const c = document.createElement("canvas");
+    c.width = c.height = 22;
+    const g = c.getContext("2d");
+    g.shadowBlur = 5;
+    if (row.type) {
+      g.shadowColor = BONUS_TYPES[row.type].color;
+      drawBonusGlyph(g, row.type, 11, 11, 7, Math.PI / 7);
+    } else {
+      row.icon(g);
+    }
+    const span = document.createElement("span");
+    span.textContent = row.text;
+    div.append(c, span);
+    box.appendChild(div);
+  }
+}
+buildLegend();
 
 // ---------------------------------------------------------------------------
 // Boot — restore the high score from previous sessions
