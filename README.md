@@ -20,7 +20,8 @@ Open `index.html` in any browser. No build, no dependencies, one file.
   steady power-ups on open ground — cyan diamond = speed boost, violet ring =
   ghost (walk through the snake, but don't be inside it when it wears off),
   ice crystal = freeze all snakes for a moment, orange hourglass = slow every
-  snake to half pace. The side panel has a key for all of them.
+  snake to half pace. Each power-up is also worth 10 points, and none of them
+  grow the snake. The side panel has a key for all of them.
 
 You're slightly faster than the snake and can turn instantly while it commits to its
 path. Bait it into corners. Use its body as a wall. Steer your enemy.
