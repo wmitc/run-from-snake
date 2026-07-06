@@ -136,7 +136,7 @@ const CONFIG = {
   playerStepMs: 110,     // ms per grid step while a direction is held
   snakeStepMs: 200,      // starting ms per snake step (speeds up per pellet)
   snakeStartLength: 4,
-  snakeSpeedupMs: 3,     // snake step interval shrinks this much per pellet
+  snakeSpeedupMs: 2,     // snake step interval shrinks this much per pellet
   snakeStepMsFloor: 130, // snake never gets faster than this (player is 110)
   pelletScore: 10,
   pelletMinDistPlayer: 4,    // don't spawn pellets in the player's lap...
@@ -630,6 +630,8 @@ function slowActive() { return game.time < game.slowUntil; }
 function collectBonus() {
   const type = bonus.type;
   bonus = null;
+  game.score += CONFIG.pelletScore; // worth a normal pellet, minus the growth
+  hud.score.textContent = game.score;
   if (type === "speed") {
     player.speedUntil = game.time + CONFIG.speedBoostDur;
   } else if (type === "ghost") {
